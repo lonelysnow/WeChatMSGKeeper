@@ -14,8 +14,8 @@ class WeChatWeb:
         self.user_agent = 'Mozilla/5.0 (Windows NT 10.0; WOW64) \
 AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.98 Safari/537.36'
         self.refer = 'https://wx2.qq.com/?&lang=zh_CN'
-        cj = http.cookiejar.CookieJar()
-        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        cookiejar = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookiejar))
         opener.addheaders = [('User-Agent', self.user_agent), ('Referer', self.refer)]
         urllib.request.install_opener(opener)
 
@@ -28,10 +28,10 @@ AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.98 Safari/537.36'
         try:
             response = urllib.request.urlopen(request)
             return response.read()
-        except urllib.error.HTTPError as e:
-            print(e.reason)
-        except urllib.error.URLError as e:
-            print(e.reason)
+        except urllib.error.HTTPError as err:
+            print(err.reason)
+        except urllib.error.URLError as err:
+            print(err.reason)
         except Exception:
             import traceback
             print(traceback.format_exc())
@@ -48,10 +48,10 @@ AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.98 Safari/537.36'
         try:
             response = urllib.request.urlopen(request)
             return response.read()
-        except urllib.error.HTTPError as e:
-            print(e.reason)
-        except urllib.error.URLError as e:
-            print(e.reason)
+        except urllib.error.HTTPError as err:
+            print(err.reason)
+        except urllib.error.URLError as err:
+            print(err.reason)
         except Exception:
             import traceback
             print(traceback.format_exc())

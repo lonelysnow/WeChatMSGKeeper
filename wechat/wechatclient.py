@@ -11,6 +11,8 @@ import subprocess
 import random
 import json
 import xml.dom.minidom
+import threading
+import queue
 from wechat.wechatweb import WeChatWeb
 
 
@@ -76,12 +78,19 @@ class WeChatClient:
             ]
         self.sync_url = ''
         self.web_client = WeChatWeb()
+        self.msg_queue = queue.Queue()
 
     def get_unix_timestamp(self):
+        '''
+        获取时间戳
+        '''
         return int(round(time.time() * 1000))
 
-    def get_complement_code(self, num):
-        return (~num)&0xFFFFFFFF
+    def get_complement_code(self, timestamp):
+        '''
+        计算时间戳的反码
+        '''
+        return (~timestamp)&0xFFFFFFFF
 
     def get_uuid(self):
         '''
@@ -164,7 +173,7 @@ class WeChatClient:
         if self.judge_login_result(response):
             return True
         params['tip'] = 0
-        for i in range(0, 10):
+        for i in range(10):
             time.sleep(0.5)
             response = self.web_client.do_get(self.login_result_url, params).decode("UTF-8")
             if self.judge_login_result(response):
@@ -184,13 +193,13 @@ class WeChatClient:
             result = re.search(reg, response)
             self.login_redirect_url = result.group(1) + '&fun=new'
             self.login_base_url = self.login_redirect_url[:self.login_redirect_url.rfind('/')]
-            print('******登录成功******\n')
+            print('******登录成功******')
             return True
         elif login_code == '408':
-            print("登录超时,请尽快扫码登录~\n")
+            print("登录超时,请尽快扫码登录~")
             return False
         elif login_code == '201':
-            '''扫码成功，但还需要再请求获取链接'''
+            #扫码成功，但还需要再请求获取链接
             print("扫码成功。。。\n")
             return False
         else:
@@ -401,10 +410,10 @@ class WeChatClient:
 
     def get_group_info_by_id(self):
         print('todo')
-    
-    def get_sync_key(self):
+
+    def do_web_sync(self):
         '''
-        获取同步所用的key
+        同步服务端信息 包括synckey, new message等
         url: https://wx2.qq.com/cgi-bin/mmwebwx-bin/webwxsync
         method: post
         parameters: sid, skey
@@ -439,8 +448,9 @@ class WeChatClient:
             str(keyval['Key']) + '_' + str(keyval['Val'])\
             for keyval in response['SyncKey']['List']\
          ])
+        return response
 
-    def do_server_sync(self):
+    def check_server_sync(self):
         '''
         微信服务器同步，检查连接是否正常，是否有新消息。。。
         url: https://webpush.wx.qq.com/cgi-bin/mmwebwx-bin/synccheck
@@ -450,6 +460,7 @@ class WeChatClient:
             retcode:
                 0 正常
                 1100 失败/退出微信
+                1101 在其他地方登陆web微信
             selector:
                 0 正常
                 2 新的消息
@@ -472,23 +483,93 @@ class WeChatClient:
         }
         response = self.web_client.do_get(url, params).decode("UTF-8")
         if not response:
-            return ()
+            return ('failed', 'failed')
         reg = r'window.synccheck={retcode:"(\d)",selector:"(\d)"}'
         result = re.search(reg, response)
         if not result:
-            return ()
+            return ('failed', 'failed')
         self.sync_url = url
         return (result.group(1), result.group(2))
 
-    def check_server_sync(self):
-        result = self.do_server_sync()
+    def check_sync_server(self):
+        '''
+        如果首次同步失败，尝试其他同步服务器。。。
+        貌似首次失败其他基本也是失败的。。。
+        先不用了。。。
+        '''
+        result = self.check_server_sync()
         if result and result[0] == '0':
             return True
         if len(self.backup_host_list) > 0:
             self.sync_url = 'https://' + self.backup_host_list.pop()
-            self.do_server_sync()
-        print('与微信服务器同步失败，请检查。。。')
+            self.check_server_sync()
+        print('与微信服务器同步失败')
         return False
+
+    def listen_msg(self):
+        '''
+        循环监听消息。。。
+        '''
+        while True:
+            retcode, selector = self.check_server_sync()
+            if retcode == 'failed':
+                raise SyncFailedException('synccheck返回结果异常')
+            elif retcode == '1100':
+                raise SyncFailedException('与微信服务器同步失败或退出微信登录')
+            elif retcode == '1101':
+                raise SyncFailedException('在其他地方登陆web微信，ヾ(￣▽￣)Bye~Bye~')
+            if retcode == '0':
+                if selector == '2':
+                    response = self.do_web_sync()
+                    if response:
+                        if response['AddMsgCount'] > 0:
+                            self.msg_queue.put(response)
+                elif selector == '0':
+                    pass
+                else:
+                    print('接收到未知selector:' + selector)
+            else:
+                print('接收到未知retcode: ' + retcode + '')
 
     def get_new_msg(self):
         print('todo')
+
+    def deal_with_msg(self, thread_id):
+        '''
+        循环处理消息。。。
+        '''
+        while True:
+            response = self.msg_queue.get(block=True)
+            print(str(thread_id) + ":" + str([msg['Content'] for msg in response['AddMsgList']]))
+
+    def start_application(self):
+        '''
+        开始干活啦。。。
+        '''
+        self.get_uuid()
+        self.get_qrcode()
+        self.do_login()
+        self.login_info_init()
+        self.open_login_statusnotify()
+        self.login_get_contact()
+        self.login_get_extra_group()
+        try:
+            listen_msg_thread = threading.Thread(target=self.listen_msg)
+            listen_msg_thread.start()
+            for i in range(1):
+                deal_msg_thread = threading.Thread(target=self.deal_with_msg, args=(i,))
+                deal_msg_thread.start()
+        except SyncFailedException as err:
+            print(err)
+        except Exception:
+            import traceback
+            print(traceback.format_exc())
+
+class SyncFailedException(Exception):
+    '''
+    synccheck专用异常。。。
+    '''
+    def __init__(self, err='synccheck失败'):
+        Exception.__init__(self, err)
+
+
